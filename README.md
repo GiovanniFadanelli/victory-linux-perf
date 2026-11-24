@@ -82,6 +82,8 @@ If the log reports `X3506: unrecognized compiler target 'vs_5_1'`, the shader co
 
 Place the x64 `d3dcompiler_47.dll` from `Redist\D3D\x64` in a recent Windows SDK beside `victory.exe`. Add `d3dcompiler_47=n,b` to Wine's DLL overrides. Version `10.0.28000.2705` restored the visible startup sequence on an RX 6800 with Wine and vkd3d-proton. [Windows SDK downloads](https://learn.microsoft.com/en-us/windows/apps/windows-sdk/downloads)
 
+Under Wine, `d3dcompiler_47` can refuse the host's own HLSL (the passes `victory-gpu` compiles at run time), or compile it without the root signature the shader asks for. Those compiles then go to DXC: `dxcompiler.dll` is looked for in `VICTORY_DXC` (the DLL or its folder), beside `dxil.dll` (`VICTORY_DXIL`, else the newest Windows SDK's `x64` folder), then beside `victory.exe` and in System32. Without it those passes switch off. On Windows `D3DCompile` compiles them and nothing changes.
+
 Please report results in an [issue](https://github.com/PastiiJay/klbf-lab/issues): GPU, driver, how long it ran, fps in the window title, and what looks wrong. Patch notes: [CHANGELOG.md](CHANGELOG.md). Full run log: [docs/klbf/results.md](docs/klbf/results.md).
 
 Product names are only used to say what this works with; they belong to their owners. KLBF Lab is not affiliated with them. License: GPL-3.0.

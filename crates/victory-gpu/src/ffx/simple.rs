@@ -5,10 +5,8 @@
 
 use std::sync::OnceLock;
 
-use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
-use windows::Win32::Graphics::Direct3D::ID3DBlob;
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::core::{Error, Result, s};
+use windows::core::{Error, Result};
 
 use crate::host::{HostList, host};
 
@@ -58,39 +56,10 @@ fn scaler() -> Option<&'static Scaler> {
 
 fn make() -> Result<Scaler> {
     let device = &host().ok_or_else(Error::empty)?.device;
-    let (mut code, mut errors): (Option<ID3DBlob>, Option<ID3DBlob>) = (None, None);
-    // SAFETY: the source and names live for the call and the out pointers are ours.
-    let result = unsafe {
-        D3DCompile(
-            SOURCE.as_ptr().cast(),
-            SOURCE.len(),
-            s!("ffx-simple"),
-            None,
-            None,
-            s!("main"),
-            s!("cs_5_1"),
-            0,
-            0,
-            &mut code,
-            Some(&mut errors),
-        )
-    };
-    if let Err(error) = result {
-        if let Some(errors) = errors {
-            // SAFETY: the compiler blob owns its bytes.
-            let text = unsafe {
-                std::slice::from_raw_parts(errors.GetBufferPointer().cast(), errors.GetBufferSize())
-            };
-            tracing::warn!(message = %String::from_utf8_lossy(text), "ffx: simple upscale shader compilation failed");
-        }
-        return Err(error);
-    }
-    let code = code.ok_or_else(Error::empty)?;
-    // SAFETY: the compiler blob contains the shader and its root signature.
+    let bytes = crate::dxc::compile(SOURCE, "main", "cs_5_1")?;
+    // SAFETY: the bytes contain the shader and its root signature.
     unsafe {
-        let bytes =
-            std::slice::from_raw_parts(code.GetBufferPointer().cast(), code.GetBufferSize());
-        let root: ID3D12RootSignature = device.CreateRootSignature(0, bytes)?;
+        let root: ID3D12RootSignature = device.CreateRootSignature(0, &bytes)?;
         let pipeline = device.CreateComputePipelineState(&D3D12_COMPUTE_PIPELINE_STATE_DESC {
             pRootSignature: std::mem::transmute_copy(&root),
             CS: D3D12_SHADER_BYTECODE {
@@ -229,30 +198,6 @@ mod tests {
     /// The shader and its root signature compile (no GPU needed).
     #[test]
     fn simple_upscale_shader_compiles() {
-        let (mut code, mut errors): (Option<ID3DBlob>, Option<ID3DBlob>) = (None, None);
-        // SAFETY: as in `make`.
-        let result = unsafe {
-            D3DCompile(
-                SOURCE.as_ptr().cast(),
-                SOURCE.len(),
-                s!("ffx-simple"),
-                None,
-                None,
-                s!("main"),
-                s!("cs_5_1"),
-                0,
-                0,
-                &mut code,
-                Some(&mut errors),
-            )
-        };
-        let text = errors.map(|e| {
-            // SAFETY: the compiler blob owns its bytes.
-            String::from_utf8_lossy(unsafe {
-                std::slice::from_raw_parts(e.GetBufferPointer().cast::<u8>(), e.GetBufferSize())
-            })
-            .into_owned()
-        });
-        assert!(result.is_ok() && code.is_some(), "{text:?}");
+        crate::dxc::compile(SOURCE, "main", "cs_5_1").expect("the shader must compile");
     }
 }
