@@ -31,6 +31,7 @@ mod dxc;
 pub mod ffx;
 pub mod fence;
 pub mod frame;
+pub mod frametime;
 #[cfg(windows)]
 mod host;
 #[cfg(windows)]
