@@ -349,9 +349,22 @@ void main() { b.Store(8, b.Load(0) + b.Load(4)); }
 
     #[test]
     fn a_shader_the_system_compiler_refuses_is_compiled_by_dxc() {
-        match system(SOURCE, "main", "cs_5_1") {
-            Ok(_) => println!("the system compiler compiled it: DXC is not exercised here"),
-            Err(e) => println!("the system compiler refused it: {e}"),
+        let refused = match system(SOURCE, "main", "cs_5_1") {
+            Ok(_) => {
+                println!("the system compiler compiled it: DXC is not exercised here");
+                false
+            }
+            Err(e) => {
+                println!("the system compiler refused it: {e}");
+                true
+            }
+        };
+        // With neither a compiler for this source nor DXC, the fixture is
+        // missing, not the fallback broken: Wine's builtin `d3dcompiler_47`
+        // is the usual case (VICTORY_DXC names the DLL or its folder).
+        if refused && library().is_err() {
+            println!("no dxcompiler.dll here: the fallback is not checked (set VICTORY_DXC)");
+            return;
         }
         let bytes = compile(SOURCE, "main", "cs_5_1").expect("a compiler must take the shader");
         let magic = std::str::from_utf8(&bytes[..4]).unwrap_or("?");
