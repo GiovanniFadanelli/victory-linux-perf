@@ -468,7 +468,20 @@ fn log_query(kind: u64, desc: *mut Header, r: ReturnCode) {
     }
 }
 
+/// Logs why a dispatch was refused, once per reason.
+fn refused(why: &'static str) -> ReturnCode {
+    static REASONS: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    let mut reasons = REASONS.lock().unwrap_or_else(|e| e.into_inner());
+    if !reasons.contains(&why) {
+        reasons.push(why);
+        tracing::warn!("ffx: dispatch refused: {why}");
+    }
+    ERROR_PARAMETER
+}
+
 pub extern "C" fn ffxDispatch(context: *mut *mut c_void, desc: *const Header) -> ReturnCode {
+    static CALLED: std::sync::Once = std::sync::Once::new();
+    CALLED.call_once(|| tracing::info!("ffx: first ffxDispatch call"));
     let api = if simple_mode() {
         None
     } else {
@@ -476,7 +489,7 @@ pub extern "C" fn ffxDispatch(context: *mut *mut c_void, desc: *const Header) ->
         Some(api)
     };
     if context.is_null() || desc.is_null() {
-        return ERROR_PARAMETER;
+        return refused("null context or description");
     }
     // SAFETY: the title's description.
     let kind = unsafe { (*desc).kind };
@@ -485,11 +498,53 @@ pub extern "C" fn ffxDispatch(context: *mut *mut c_void, desc: *const Header) ->
         return ERROR_PARAMETER;
     }
     // SAFETY: a description of this type.
-    let mut d = unsafe { *desc.cast::<DispatchUpscale>() };
+    let d = unsafe { *desc.cast::<DispatchUpscale>() };
     let title_list = d.command_list as This;
-    let Some(list) = crate::list::host_list(title_list) else {
-        return ERROR_PARAMETER;
-    };
+    if title_list.is_null() {
+        return refused("no command list");
+    }
+    if let Some(list) = crate::list::host_list(title_list) {
+        return dispatch_on(list, title_list, context, d, api);
+    }
+    // A thin list (VICTORY_THIN=1) has no host list: the dispatch is written
+    // into its stream and made on the list of ours that replays it.
+    let job = Job { context, d, api };
+    if crate::list::thin::host_work(title_list, Box::new(move |back| job.run(back))) {
+        return OK;
+    }
+    refused("the command list has no host list and no thin recording")
+}
+
+/// A dispatch written into a thin list's stream, made when it is replayed.
+struct Job {
+    context: *mut *mut c_void,
+    d: DispatchUpscale,
+    api: Option<&'static Api>,
+}
+
+// SAFETY: the pointers name the title's context and resources, which stay
+// until the list has run, like every object a thin list names.
+unsafe impl Send for Job {}
+
+impl Job {
+    fn run(self, back: This) {
+        let Some(list) = crate::list::host_list(back) else {
+            refused("the list that replays a thin one has no host list");
+            return;
+        };
+        dispatch_on(list, back, self.context, self.d, self.api);
+    }
+}
+
+/// The dispatch on host list `list` (of title list `title_list`, or of the
+/// list of ours that replays a thin one).
+fn dispatch_on(
+    list: &crate::host::HostList,
+    title_list: This,
+    context: *mut *mut c_void,
+    mut d: DispatchUpscale,
+    api: Option<&'static Api>,
+) -> ReturnCode {
     let output = d.resources[OUTPUT].resource as This;
     let input = d.resources[0].resource as This;
     let Some(destination) = crate::resource::host_resource(output) else {
@@ -556,7 +611,7 @@ pub extern "C" fn ffxDispatch(context: *mut *mut c_void, desc: *const Header) ->
         r.state = ffx;
     }
     if d.resources[0].resource.is_null() || d.resources[OUTPUT].resource.is_null() {
-        return ERROR_PARAMETER;
+        return refused("colour input or output resource is null");
     }
     d.command_list = list.recording().as_raw();
     // SAFETY: the SDK's call on an open host list with live textures.

@@ -130,6 +130,15 @@ impl Front {
         }
     }
 
+    /// [`host_work`]: written down if a recording is open.
+    fn host_work(&mut self, work: Work) -> bool {
+        if self.closed || self.recording.is_none() {
+            return false;
+        }
+        self.put(HOST_WORK, &[Box::into_raw(Box::new(work)) as u64]);
+        true
+    }
+
     fn hand_over(&mut self) {
         let Some(recording) = &self.recording else { return };
         if self.words.is_empty() {
@@ -470,6 +479,22 @@ const TARGETS: u64 = after(13);
 const CLEAR_RTV: u64 = after(14);
 const CLEAR_DSV: u64 = after(15);
 const COPY_TEXTURE: u64 = after(16);
+/// Host work the title asked of a thin list (the upscaler): made on the
+/// list of ours that replays the stream, which has a host list.
+const HOST_WORK: u64 = after(17);
+
+/// What runs on the replaying list.
+pub(crate) type Work = Box<dyn FnOnce(This) + Send>;
+
+/// Writes `work` into the stream of thin title list `this`; false if the
+/// list is not one being recorded thin (it has a host list of its own, or
+/// nothing is recorded on it).
+pub(crate) fn host_work(this: This, work: Work) -> bool {
+    if this.is_null() {
+        return false;
+    }
+    front(this).host_work(work)
+}
 
 /// The bytes of `count` things at `items` (none if null).
 fn bytes_of<'a, T>(items: *const T, count: usize) -> &'a [u8] {
@@ -698,6 +723,14 @@ fn translate(list: This, stream: &[u64], left: impl Fn() -> bool) -> (u64, bool)
             // SAFETY: a list of ours.
             let uploads = unsafe { &(*list.cast::<List>()).uploads };
             held(uploads).push(block);
+            continue;
+        }
+        if op == HOST_WORK {
+            // SAFETY: made by `Front::host_work`, named once.
+            let work = *unsafe { Box::from_raw(w[0] as *mut Work) };
+            if !skip {
+                work(list);
+            }
             continue;
         }
         if skip && op != CLOSE && op != RESET {
