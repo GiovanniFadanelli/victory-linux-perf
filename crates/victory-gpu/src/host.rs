@@ -7676,6 +7676,12 @@ impl HostList {
             SPLIT[7].fetch_add(us.as_nanos() as u64, Ordering::Relaxed);
         }
     }
+
+    /// The list's own recording, for host work that binds its own heaps
+    /// and pipeline on it (the upscaler).
+    pub(crate) fn recording(&self) -> &ID3D12GraphicsCommandList {
+        self.list.recording()
+    }
 }
 
 /// The numbers of [`HostList::epoch`].

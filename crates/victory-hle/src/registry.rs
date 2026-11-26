@@ -93,3 +93,27 @@ mod tests {
         assert!(!m.serves("api-ms-win-core-file-l1-1-0.dll"));
     }
 }
+
+#[cfg(all(test, windows))]
+mod ffx_tests {
+    use super::*;
+
+    #[test]
+    fn the_fidelityfx_module_serves_the_title_upscaler_dlls_only_when_asked() {
+        let name = "amd_fidelityfx_loader_xbox.dll";
+        let unasked = registry()
+            .iter()
+            .filter(|m| m.serves(name))
+            .flat_map(|m| m.exports.iter())
+            .any(|e| e.name == "ffxCreateContext");
+        assert!(
+            unasked == victory_gpu::ffx::enabled(),
+            "the ffx module answers {} with VICTORY_FFX_DIR={}, VICTORY_FFX_SIMPLE unset",
+            name,
+            match std::env::var_os("VICTORY_FFX_DIR") {
+                Some(v) => format!("{v:?}"),
+                None => String::from("unset"),
+            }
+        );
+    }
+}

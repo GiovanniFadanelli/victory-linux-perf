@@ -1144,6 +1144,16 @@ fn heap_buffer_pass(heap: &crate::descriptor::Heap, host: &crate::descriptor::ho
 }
 
 impl State {
+    /// The host list's pipeline, root signatures and heaps are unknown
+    /// (host work bound its own): bind the title's again before the next
+    /// command.
+    pub(crate) fn forget_host(&mut self) {
+        self.host_pipeline = 0;
+        self.host_roots = [0; 2];
+        self.host_heaps = [0; 2];
+        self.host_heaps_set = false;
+    }
+
     pub(crate) fn reset(&mut self, pipeline: This) {
         *self = State::default();
         self.pipeline = pipeline as usize;

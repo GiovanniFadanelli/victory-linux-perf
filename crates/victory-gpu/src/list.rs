@@ -187,6 +187,13 @@ pub(crate) fn host_list<'a>(this: This) -> Option<&'a crate::host::HostList> {
     unsafe { (*this.cast::<List>()).host.as_ref() }
 }
 
+/// After host work that bound its own heaps, root signatures and pipeline
+/// on a title list's host list (the upscaler): the next draw or dispatch
+/// binds the title's again.
+pub(crate) fn forget_host_bindings(this: This) {
+    with_state(this, |_, state| state.forget_host());
+}
+
 /// The host side of a submitted list, taken from it: a queue that waits
 /// for a fence runs it later, and the title may reset the list meanwhile.
 /// With it go the upload memory and the dynamic descriptor slots its

@@ -39,6 +39,8 @@ mod debug_hud;
 pub mod descriptor;
 pub mod device;
 #[cfg(windows)]
+pub mod ffx;
+#[cfg(windows)]
 mod draw;
 pub mod dxgi;
 pub mod fence;

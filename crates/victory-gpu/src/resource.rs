@@ -100,6 +100,20 @@ pub(crate) struct ResourceDesc {
 
 #[cfg(windows)]
 impl ResourceDesc {
+    /// One level, one layer, unordered-access only: the shape a FidelityFX
+    /// upscale output of this title has, the one the host writes through an
+    /// FP16 copy and packs back (`crate::ffx::rgb9e5`).
+    pub(crate) fn rgb9e5_fsr_candidate(&self) -> bool {
+        use windows::Win32::Graphics::Direct3D12::*;
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R9G9B9E5_SHAREDEXP;
+        self.format == DXGI_FORMAT_R9G9B9E5_SHAREDEXP.0 as u32
+            && self.dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D.0 as u32
+            && self.depth_or_array_size == 1
+            && self.mip_levels == 1
+            && self.sample_count == 1
+            && self.flags & 0xf == 0x5
+    }
+
     /// Width, height, format and levels (`crate::texstore`).
     pub(crate) fn shape(&self) -> [u32; 4] {
         [self.width as u32, self.height, self.format, u32::from(self.mip_levels)]
@@ -1152,6 +1166,10 @@ struct Resource {
     /// access, the colour texture shaders write instead ([`Twin`]).
     #[cfg(windows)]
     host: Hosted,
+    /// The upscaler's output packer, made once the first time it is needed
+    /// (`ffxDispatch` through `rgb9e5_fsr_output`).
+    #[cfg(windows)]
+    fsr_output: std::sync::OnceLock<Option<Box<crate::ffx::rgb9e5::Output>>>,
 }
 
 /// A title texture's host copy and the state it is in. The title's barriers
@@ -2440,6 +2458,19 @@ pub(crate) fn host_resource<'a>(
     Some(unsafe { &*std::ptr::from_ref(&host.texture) })
 }
 
+#[cfg(windows)]
+pub(crate) fn rgb9e5_fsr_output(this: This) -> Option<&'static crate::ffx::rgb9e5::Output> {
+    let resource = resource(this);
+    if !resource.desc.rgb9e5_fsr_candidate() {
+        return None;
+    }
+    let texture = host_copy(this)?;
+    resource
+        .fsr_output
+        .get_or_init(|| crate::ffx::rgb9e5::Output::new(&texture.texture).map(Box::new))
+        .as_deref()
+}
+
 /// Whether `this` is a valid title resource created by this runtime.
 #[cfg(windows)]
 pub(crate) fn is_resource(this: This) -> bool {
@@ -2524,6 +2555,12 @@ fn host_texture_as(
     if d.flags & UNORDERED != 0 && SRGB.iter().any(|&(srgb, _)| srgb == d.format) {
         d.format = family(d.format);
     }
+    // RGB9E5: the upscaler's output may be made as a plain texture the
+    // card can write, then packed back into the title's copy
+    // (`crate::ffx::rgb9e5`).
+    let rgb9e5_fallback = d.format == 67
+        && desc.rgb9e5_fsr_candidate()
+        && crate::ffx::enabled();
     // The clear value names the format too: format, then color or depth
     // and stencil (5 words).
     let clear_value = (!clear.is_null()).then(|| {
@@ -2594,8 +2631,33 @@ fn host_texture_as(
         }
     };
     if let Err(e) = &made {
-        crate::residency::allocation_error(e);
-        tracing::warn!(error = %e, desc = ?d, reserved, "no host texture");
+        if rgb9e5_fallback {
+            // The title's flags are what the card refuses; a texture of the
+            // same shape without them is the upscaler's output to write to.
+            d.flags = 0;
+            match unsafe {
+                host.device.CreateCommittedResource(
+                    &heap,
+                    crate::host::not_resident(),
+                    (&raw const d).cast(),
+                    D3D12_RESOURCE_STATES(crate::host::legal_for(d.flags, crate::host::texture_state(state)) as i32),
+                    None,
+                    &mut texture,
+                )
+            } {
+                Ok(()) => {
+                    tracing::info!(width = d.width, height = d.height, "RGB9E5 host texture without the title's flags (upscaler output)");
+                }
+                Err(e) => {
+                    crate::residency::allocation_error(&e);
+                    tracing::warn!(error = %e, desc = ?d, "no host texture");
+                    return None;
+                }
+            }
+        } else {
+            crate::residency::allocation_error(e);
+            tracing::warn!(error = %e, desc = ?d, reserved, "no host texture");
+        }
     }
     if !reserved
         && made.is_ok()
@@ -2754,6 +2816,8 @@ fn hand_out_resource(
             wanted: std::sync::atomic::AtomicU32::new(u32::MAX),
             grown: std::sync::atomic::AtomicBool::new(false),
         },
+        #[cfg(windows)]
+        fsr_output: std::sync::OnceLock::new(),
     });
     // The host copy waits for the texture's first use ([`Hosted`]).
     #[cfg(windows)]

@@ -51,6 +51,11 @@ impl Rec {
         Self { list, any: AtomicBool::new(false), held: Mutex::new(Held(Vec::new())) }
     }
 
+    /// The list itself (for host work that binds its own state on it).
+    pub(crate) fn recording(&self) -> &ID3D12GraphicsCommandList {
+        &self.list
+    }
+
     /// Records `barriers` now, or holds them for the next use of the list.
     ///
     /// # Safety
